@@ -1,0 +1,198 @@
+vagrant ssh master
+git clone https://github.com/takara9/codes_for_lessons
+cd codes_for_lessons/step15/
+kubectl apply -f setup-test
+kubectl apply -f setup-prod
+
+#exit
+#export KUBECONFIG=`pwd`/kubeconfig/config
+#vagrant ssh master
+
+
+kubectl config get-contexts
+kubectl config rename-context kubernetes-admin@kubernetes superuser
+kubectl config get-contexts
+kubectl cluster-info
+kubectl get secret -n test
+kubectl get secret -n prod
+mkdir users
+cd users
+mkdir developer
+mkdir operator
+
+
+cd developer
+kubectl get secret developer-token-sbfp7 -n test -o jsonpath={.data.ca\\.crt} | base64 --decode > ca.crt
+kubectl get secret developer-token-sbfp7 -n test -o jsonpath={.data.token}   | base64 --decode > token-dev-test.txt
+kubectl get secret developer-token-cbnhq -n prod -o jsonpath={.data.token}   | base64 --decode > token-dev-prod.txt
+ls
+cd ../operator
+cp ../developer/ca.crt .
+kubectl get secret sysop-token-cb89s -n test -o jsonpath={.data.token} | base64 --decode > token-sysop-test.txt
+kubectl get secret sysop-token-nhw26 -n prod -o jsonpath={.data.token} | base64 --decode > token-sysop-prod.txt
+ls
+kubectl config get-contexts
+cd ../developer
+kubectl config set-credentials dev-prod --token=`cat token-dev-prod.txt`
+kubectl config set-context le2-pd --cluster=kubernetes --user=dev-prod --namespace=prod
+kubectl config set-credentials dev-test --token=`cat token-dev-test.txt`
+kubectl config set-context le2-td --cluster=kubernetes --user=dev-test --namespace=test
+cd ../operator
+kubectl config set-credentials sysop-prod --token=`cat token-sysop-prod.txt`
+kubectl config set-context le2-po --cluster=kubernetes --user=sysop-prod  --namespace=prod
+kubectl config set-credentials sysop-test --token=`cat token-sysop-test.txt`
+kubectl config set-context le2-to --cluster=kubernetes --user=sysop-test  --namespace=test
+kubectl config get-contexts
+
+
+
+sudo adduser d
+
+sudo gpasswd -a d sudo
+sudo cp  ../developer/*  /home/d/
+su - d 
+
+kubectl config set-cluster le2 --server=https://172.16.20.11:6443 --certificate-authority=ca.crt
+kubectl config set-credentials dev-test --token=`cat token-dev-test.txt`
+kubectl config set-credentials dev-prod --token=`cat token-dev-prod.txt`
+kubectl config set-context le2-td --cluster=le2 --user=dev-test --namespace=test
+kubectl config set-context le2-pd --cluster=le2 --user=dev-prod --namespace=prod
+kubectl config get-contexts
+kubectl config set-context le2-td
+
+
+git clone https://github.com/takara9/codes_for_lessons
+cd codes_for_lessons/step15/container/
+sudo docker build --tag maho/webapl3 .
+
+
+cd ../application
+kubectl config use-context le2-td
+vi  apl-1.yml
+####################################
+#
+# 外部公開用 模擬
+#
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web-apl1
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: web-apl1
+  template:
+    metadata:
+      labels:
+              #        web: web-apl1
+        app: web-apl1           # 外部公開用ラベル
+    spec:
+      containers:
+      - image: maho/webapl3  # 模擬用アプリ
+        name: web-server-c
+        ports:
+        - containerPort: 80
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: web-apl1
+spec:
+  type: NodePort
+  ports:
+  - port: 80
+    protocol: TCP
+  selector:
+    app: web-apl1
+###################################
+
+
+kubectl apply -f apl-1.yml
+kubectl get po
+
+
+kubectl config use-context le2-pd
+kubectl apply -f apl-1.yml
+exit
+
+##################
+# master で実行
+
+cd
+mkdir cert
+cd cert/
+openssl genrsa -des3 -out server.key.encrypted 2048
+
+openssl rsa -in server.key.encrypted -out server.key
+
+
+
+#### <--- ここでNG
+# https://yokohei.com/docs/k8s-hw-tls.html
+sudo vi /etc/ssl/openssl.cnf
+
+RANDFILE              = $ENV::HOME/.rnd
+##############
+
+
+openssl req -new -key server.key -out www.sample.com.csr -subj "/C=JP/ST=Tokyo/L=Nihombash/O=SampleCorp/CN=www.sample.com"
+openssl req -new -key server.key -out test.sample.com.csr -subj "/C=JP/ST=Tokyo/L=Nihombash/O=SampleCorp/CN=test.sample.com"
+ls
+openssl x509 -req -days 365 -in www.sample.com.csr -signkey server.key -out www.sample.com.crt 
+openssl x509 -req -days 365 -in test.sample.com.csr -signkey server.key -out test.sample.com.crt
+kubectl create secret tls cert -n prod --cert=www.sample.com.crt --key=server.key
+kubectl create secret tls cert -n test --cert=test.sample.com.crt --key=server.key
+kubectl get secret cert -n prod
+kubectl get secret cert -n test
+cd
+cd codes_for_lessons/step15/config-nginx/
+kubectl create configmap nginx-conf --from-file=prod -n prod
+kubectl create configmap nginx-conf --from-file=test -n test
+kubectl get cm nginx-conf -n test
+kubectl get cm nginx-conf -n prod
+
+
+kubectl config get-contexts
+kubectl config use-context le2-td
+kubectl config current-context
+cd ../application/
+
+
+
+
+a)
+#kubectl apply -f apl-1.yml
+kubectl get svc,deploy,po -o wide
+
+curl  http://172.16.20.11:30921
+curl  http://172.16.20.12:30921
+curl  http://172.16.20.13:30921
+
+
+b)
+kubectl apply  -f apl-2.yml
+kubectl get  -f  apl-2.yml
+
+kubectl run -it client --image=busybox --restart=Never sh
+kubectl delete -f apl-1.yml
+
+
+## wait 
+kubectl run -it client --image=busybox --restart=Never sh
+
+wget -q -O - http://web-apl2-rest/
+exit
+
+kubectl delete po client
+kubectl delete -f apl-2.yml
+
+c)
+kubectl apply -f apl-3-svc.yml
+kubectl apply -f apl-3.yml
+kubectl get svc,deploy,po
+
+kubectl get events  | grep replicaset
+curl -k -H 'test.sample.com' https://10.32.0.212/
+
+
